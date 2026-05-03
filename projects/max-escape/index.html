@@ -1,0 +1,1062 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Escape from Max</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #0a0a0a;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    height: 100vh;
+    overflow: hidden;
+    font-family: 'Courier New', monospace;
+    user-select: none;
+  }
+  #game-wrapper {
+    position: relative;
+    border: 3px solid #2a1a1a;
+    box-shadow: 0 0 60px rgba(180,0,0,0.3), inset 0 0 60px rgba(0,0,0,0.5);
+    max-width: 98vw;
+    max-height: 96vh;
+    overflow: hidden;
+  }
+  canvas { display: block; cursor: none; max-width: 100%; max-height: 100%; }
+  #ui-overlay {
+    position: absolute;
+    top: 0; left: 0; right: 0; bottom: 0;
+    pointer-events: none;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    padding: 16px;
+  }
+  #timer {
+    color: #ccc;
+    font-size: 22px;
+    text-shadow: 0 0 10px rgba(200,50,50,0.6);
+    letter-spacing: 3px;
+  }
+  #hint {
+    color: #888;
+    font-size: 13px;
+    text-align: center;
+    letter-spacing: 2px;
+  }
+  #message-center {
+    position: absolute;
+    top: 50%; left: 50%;
+    transform: translate(-50%, -50%);
+    text-align: center;
+    pointer-events: none;
+  }
+  #message-center h1 {
+    font-size: 52px;
+    color: #c41e1e;
+    text-shadow: 0 0 40px rgba(200,0,0,0.8), 0 0 80px rgba(200,0,0,0.4);
+    letter-spacing: 6px;
+    margin-bottom: 8px;
+  }
+  #message-center .sub {
+    font-size: 18px;
+    color: #999;
+    letter-spacing: 4px;
+  }
+  #message-center .survived {
+    font-size: 22px;
+    color: #c41e1e;
+    margin-top: 10px;
+    letter-spacing: 3px;
+  }
+  #lives-display {
+    position: absolute;
+    top: 12px; right: 16px;
+    font-size: 22px;
+    letter-spacing: 4px;
+    pointer-events: none;
+  }
+  #powerup-display {
+    position: absolute;
+    top: 50px; right: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    pointer-events: none;
+  }
+  .powerup-tag {
+    font-size: 12px;
+    padding: 3px 8px;
+    border-radius: 3px;
+    letter-spacing: 2px;
+    text-align: right;
+  }
+</style>
+</head>
+<body>
+<div id="game-wrapper">
+  <canvas id="game"></canvas>
+  <div id="ui-overlay">
+    <div id="timer"></div>
+    <div id="hint">WASD to move</div>
+  </div>
+  <div id="message-center">
+    <h1>ESCAPE FROM MAX</h1>
+    <div class="sub">Press SPACE to start</div>
+  </div>
+  <div id="lives-display"></div>
+  <div id="powerup-display"></div>
+</div>
+
+<script>
+(function() {
+  // ─── CONSTANTS ────────────────────────────
+  const TILE = 32;
+  const MAP_W = 42;
+  const MAP_H = 30;
+
+  const canvas = document.getElementById('game');
+  const ctx = canvas.getContext('2d');
+  const wrapper = document.getElementById('game-wrapper');
+  const timerEl = document.getElementById('timer');
+  const hintEl = document.getElementById('hint');
+  const msgCenter = document.getElementById('message-center');
+  const livesEl = document.getElementById('lives-display');
+  const powerupEl = document.getElementById('powerup-display');
+
+  canvas.width = MAP_W * TILE;
+  canvas.height = MAP_H * TILE;
+
+  // ─── MAP ──────────────────────────────────
+  // 0=floor, 1=wall, 2=furniture, 3=carpet
+  const MAP_STR = [
+    '##########################################',
+    '#..C......C.......CC..............C....C.#',
+    '#..FFFF...FFFF....CC.......CC....FFFF....#',
+    '#..FFFF...FFFF.....FFFF....CC....FFFF....#',
+    '#...CC.............FFFF....CC......CC....#',
+    '#...CC..........C.................CC.....#',
+    '#..............C..................CC.....#',
+    '#...FFFF......CC...........C..............#',
+    '#...FFFF......CC...........C..............#',
+    '####....##############..########....######',
+    '#..CC........CC...................CC.....#',
+    '#..CC........CC........C.........CC......#',
+    '#..FFFF..........##......FFFF...CC.......#',
+    '#..FFFF..........##......FFFF............#',
+    '#..CC.............##..........CC.........#',
+    '#..CC.........................CC.........#',
+    '####....##############..########....######',
+    '#..CC........CC..................CC......#',
+    '#..CC........CC........C........CC.......#',
+    '#..FFFF...........##....FFFF....CC.......#',
+    '#..FFFF...........##....FFFF.............#',
+    '#..CC..............##.........CC.........#',
+    '#..CC.........................CC.........#',
+    '####....##############..########....######',
+    '#..CC........CC...........C......CC......#',
+    '#..CC........CC..........CC......CC......#',
+    '#..FFFF...........##.....FFFF.....CC.....#',
+    '#..FFFF...........##.....FFFF............#',
+    '#..CC.........................CC.........#',
+    '##########################################',
+  ];
+
+  let map = [];
+  for (let y = 0; y < MAP_H; y++) {
+    map[y] = [];
+    for (let x = 0; x < MAP_W; x++) {
+      const ch = MAP_STR[y][x];
+      if (ch === '#') map[y][x] = 1;
+      else if (ch === 'F') map[y][x] = 2;
+      else if (ch === 'C') map[y][x] = 3;
+      else map[y][x] = 0;
+    }
+  }
+
+  function isSolid(x, y) {
+    if (x < 0 || y < 0 || x >= MAP_W || y >= MAP_H) return true;
+    return map[y][x] === 1 || map[y][x] === 2;
+  }
+
+  // ─── GAME STATE ───────────────────────────
+  const STATE = { MENU: 0, PLAYING: 1, OVER: 2 };
+  let gameState = STATE.MENU;
+  let survivalTime = 0;
+  let shakeAmount = 0;
+  let vignetteAlpha = 0;
+  let lastMilestone = 0;
+  let milestoneMsg = '';
+  let milestoneTimer = 0;
+
+  // ─── PLAYER ───────────────────────────────
+  let player = { x: 0, y: 0, speed: 4.5, baseSpeed: 4.5, boostSpeed: 7.0 };
+  let lives = 3;
+  let invincibleTimer = 0;   // brief invincibility after being hit
+  let speedBoostTimer = 0;    // speed boost duration
+  let invisibleTimer = 0;     // invisibility duration
+  let hasKnife = false;       // one-time knife stun
+
+  function spawnPlayer() {
+    player.x = 10 * TILE + TILE / 2;
+    player.y = 4 * TILE + TILE / 2;
+    lives = 3;
+    invincibleTimer = 0;
+    speedBoostTimer = 0;
+    invisibleTimer = 0;
+    hasKnife = false;
+    player.speed = player.baseSpeed;
+  }
+
+  // ─── MONSTER (MAX) ────────────────────────
+  let max = { x: 0, y: 0, baseSpeed: 4.0, speed: 4.0, path: [], pathIndex: 0, pathTimer: 0, stunnedTimer: 0, wanderAngle: 0, wanderTimer: 0 };
+  let maxEyeGlow = 1;
+
+  function spawnMax() {
+    max.x = 36 * TILE + TILE / 2;
+    max.y = 26 * TILE + TILE / 2;
+    max.path = [];
+    max.pathIndex = 0;
+    max.pathTimer = 0;
+    max.speed = max.baseSpeed;
+    max.stunnedTimer = 0;
+    max.wanderAngle = Math.random() * Math.PI * 2;
+    max.wanderTimer = 0;
+  }
+
+  // ─── ITEMS ────────────────────────────────
+  const ITEM_TYPES = ['speed', 'invisible', 'knife'];
+  const ITEM_COLORS = { speed: '#ffcc00', invisible: '#66ccff', knife: '#ff4444' };
+  const ITEM_LABELS = { speed: 'SPD', invisible: 'INV', knife: 'KNIFE' };
+  let items = [];
+
+  function getRandomFloorTile() {
+    let attempts = 0;
+    while (attempts < 200) {
+      const tx = 1 + Math.floor(Math.random() * (MAP_W - 2));
+      const ty = 1 + Math.floor(Math.random() * (MAP_H - 2));
+      if (!isSolid(tx, ty)) {
+        return { x: tx * TILE + TILE / 2, y: ty * TILE + TILE / 2 };
+      }
+      attempts++;
+    }
+    return { x: 5 * TILE + TILE / 2, y: 2 * TILE + TILE / 2 };
+  }
+
+  function spawnItems(count) {
+    items = [];
+    for (let i = 0; i < count; i++) {
+      const type = ITEM_TYPES[i % 3];
+      const pos = getRandomFloorTile();
+      const distToPlayer = Math.hypot(pos.x - player.x, pos.y - player.y);
+      const distToMax = Math.hypot(pos.x - max.x, pos.y - max.y);
+      // Don't spawn too close to player or max
+      if (distToPlayer > 120 && distToMax > 120) {
+        items.push({ x: pos.x, y: pos.y, type: type, collected: false, bobOffset: Math.random() * Math.PI * 2 });
+      } else {
+        i--; // retry
+      }
+    }
+  }
+
+  function respawnItem(index) {
+    setTimeout(() => {
+      if (gameState !== STATE.PLAYING) return;
+      const pos = getRandomFloorTile();
+      items[index] = {
+        x: pos.x, y: pos.y,
+        type: ITEM_TYPES[Math.floor(Math.random() * 3)],
+        collected: false,
+        bobOffset: Math.random() * Math.PI * 2
+      };
+    }, 8000 + Math.random() * 4000);
+  }
+
+  // ─── INPUT ────────────────────────────────
+  const keys = {};
+  window.addEventListener('keydown', e => {
+    keys[e.key.toLowerCase()] = true;
+    if (e.key === ' ' || e.code === 'Space') {
+      e.preventDefault();
+      if (gameState === STATE.MENU) startGame();
+      else if (gameState === STATE.OVER) resetToMenu();
+    }
+  });
+  window.addEventListener('keyup', e => { keys[e.key.toLowerCase()] = false; });
+
+  // ─── BFS PATHFINDING ──────────────────────
+  function bfsPath(sx, sy, ex, ey) {
+    const gx = Math.floor(sx / TILE);
+    const gy = Math.floor(sy / TILE);
+    const tx = Math.floor(ex / TILE);
+    const ty = Math.floor(ey / TILE);
+
+    if (gx === tx && gy === ty) return [{ x: ex, y: ey }];
+    if (isSolid(tx, ty)) return [{ x: ex, y: ey }];
+
+    const visited = new Array(MAP_H).fill(null).map(() => new Array(MAP_W).fill(false));
+    const parent = new Array(MAP_H).fill(null).map(() => new Array(MAP_W).fill(null));
+    const queue = [{ x: gx, y: gy }];
+    visited[gy][gx] = true;
+
+    const dirs = [[0, -1], [1, 0], [0, 1], [-1, 0], [-1, -1], [1, -1], [1, 1], [-1, 1]];
+    let found = false;
+
+    while (queue.length > 0 && !found) {
+      const cur = queue.shift();
+      for (const [dx, dy] of dirs) {
+        const nx = cur.x + dx;
+        const ny = cur.y + dy;
+        if (nx < 0 || ny < 0 || nx >= MAP_W || ny >= MAP_H) continue;
+        if (visited[ny][nx] || isSolid(nx, ny)) continue;
+        visited[ny][nx] = true;
+        parent[ny][nx] = cur;
+        if (nx === tx && ny === ty) { found = true; break; }
+        queue.push({ x: nx, y: ny });
+      }
+    }
+
+    if (!found) return [{ x: ex, y: ey }];
+
+    // Reconstruct path
+    const path = [];
+    let cx = tx, cy = ty;
+    while (cx !== gx || cy !== gy) {
+      path.unshift({ x: cx * TILE + TILE / 2, y: cy * TILE + TILE / 2 });
+      const p = parent[cy][cx];
+      if (!p) break;
+      cx = p.x;
+      cy = p.y;
+    }
+    return path;
+  }
+
+  // ─── PARTICLES ────────────────────────────
+  let particles = [];
+  function spawnDust(x, y) {
+    if (particles.length > 60) return;
+    particles.push({
+      x: x + (Math.random() - 0.5) * 100,
+      y: y + (Math.random() - 0.5) * 100,
+      vx: (Math.random() - 0.5) * 0.3,
+      vy: (Math.random() - 0.5) * 0.3,
+      life: 1,
+      decay: 0.005 + Math.random() * 0.015,
+      size: 1 + Math.random() * 2
+    });
+  }
+
+  function updateParticles() {
+    for (let i = particles.length - 1; i >= 0; i--) {
+      const p = particles[i];
+      p.x += p.vx;
+      p.y += p.vy;
+      p.life -= p.decay;
+      if (p.life <= 0) particles.splice(i, 1);
+    }
+  }
+
+  // ─── COLLISION ────────────────────────────
+  function collideWithMap(px, py, radius) {
+    const left = Math.floor((px - radius) / TILE);
+    const right = Math.floor((px + radius) / TILE);
+    const top = Math.floor((py - radius) / TILE);
+    const bottom = Math.floor((py + radius) / TILE);
+
+    for (let ty = top; ty <= bottom; ty++) {
+      for (let tx = left; tx <= right; tx++) {
+        if (isSolid(tx, ty)) {
+          // Circle-rect collision
+          const rx = tx * TILE;
+          const ry = ty * TILE;
+          const closestX = Math.max(rx, Math.min(px, rx + TILE));
+          const closestY = Math.max(ry, Math.min(py, ry + TILE));
+          const dx = px - closestX;
+          const dy = py - closestY;
+          if (dx * dx + dy * dy < radius * radius) return true;
+        }
+      }
+    }
+    return false;
+  }
+
+
+
+  // ─── GAME LOGIC ──────────────────────────
+  function startGame() {
+    gameState = STATE.PLAYING;
+    survivalTime = 0;
+    lastMilestone = 0;
+    milestoneMsg = '';
+    milestoneTimer = 0;
+    spawnPlayer();
+    spawnMax();
+    spawnItems(6);
+    particles = [];
+    shakeAmount = 0;
+    vignetteAlpha = 0;
+    msgCenter.style.display = 'none';
+    timerEl.textContent = '00:00.0';
+    timerEl.style.color = '#ccc';
+    hintEl.textContent = 'WASD to move  |  Survive!';
+    hintEl.style.color = '#888';
+    updateUI();
+  }
+
+  function resetToMenu() {
+    gameState = STATE.MENU;
+    survivalTime = 0;
+    shakeAmount = 0;
+    vignetteAlpha = 0;
+    particles = [];
+    items = [];
+    lives = 3;
+    msgCenter.style.display = '';
+    msgCenter.innerHTML = '<h1>ESCAPE FROM MAX</h1><div class="sub">Press SPACE to start</div>';
+    timerEl.textContent = '';
+    hintEl.textContent = 'WASD to move';
+    updateUI();
+  }
+
+  function hitPlayer() {
+    if (invincibleTimer > 0 || gameState !== STATE.PLAYING) return;
+    if (hasKnife) {
+      // Use knife to stun Max!
+      hasKnife = false;
+      max.stunnedTimer = 3;
+      hintEl.textContent = 'KNIFE USED! Max stunned for 3s';
+      hintEl.style.color = '#ff4444';
+      setTimeout(() => { hintEl.style.color = '#888'; hintEl.textContent = 'WASD to move  |  Survive!'; }, 1500);
+      invincibleTimer = 0.5;
+      return;
+    }
+    lives--;
+    if (lives <= 0) {
+      gameOver();
+      return;
+    }
+    invincibleTimer = 2; // 2 seconds invincibility after hit
+    shakeAmount = 10;
+    vignetteAlpha = 0.7;
+    hintEl.textContent = `HIT! ${lives} life${lives > 1 ? 's' : ''} left`;
+    hintEl.style.color = '#ff0000';
+    setTimeout(() => { hintEl.style.color = '#888'; hintEl.textContent = 'WASD to move  |  Survive!'; }, 1500);
+    updateUI();
+  }
+
+  function collectItem(index) {
+    const item = items[index];
+    if (item.collected) return;
+    item.collected = true;
+
+    switch (item.type) {
+      case 'speed':
+        speedBoostTimer = 5;
+        player.speed = player.boostSpeed;
+        hintEl.textContent = 'SPEED BOOST! 5s';
+        hintEl.style.color = '#ffcc00';
+        break;
+      case 'invisible':
+        invisibleTimer = 6;
+        hintEl.textContent = 'INVISIBLE! Max can\'t see you (6s)';
+        hintEl.style.color = '#66ccff';
+        break;
+      case 'knife':
+        hasKnife = true;
+        hintEl.textContent = 'KNIFE acquired! Auto-uses when Max hits you';
+        hintEl.style.color = '#ff4444';
+        break;
+    }
+    setTimeout(() => { hintEl.style.color = '#888'; hintEl.textContent = 'WASD to move  |  Survive!'; }, 2000);
+    respawnItem(index);
+    updateUI();
+  }
+
+  function gameOver() {
+    gameState = STATE.OVER;
+    const secs = survivalTime.toFixed(1);
+    msgCenter.style.display = '';
+    msgCenter.innerHTML = `<h1>YOU DIED</h1><div class="survived">Survived: ${secs}s</div><div class="sub">Press SPACE to retry</div>`;
+    shakeAmount = 15;
+    vignetteAlpha = 1;
+    timerEl.textContent = formatTime(survivalTime);
+    hintEl.textContent = '';
+  }
+
+  function formatTime(t) {
+    const mins = Math.floor(t / 60);
+    const secs = Math.floor(t % 60);
+    const dec = Math.floor((t % 1) * 10);
+    return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}.${dec}`;
+  }
+
+  function updateUI() {
+    // Lives display
+    let hearts = '';
+    for (let i = 0; i < 3; i++) {
+      hearts += i < lives ? '♥ ' : '♡ ';
+    }
+    livesEl.textContent = hearts;
+    livesEl.style.color = lives <= 1 ? '#ff3333' : '#cc4444';
+
+    // Power-up indicators
+    let tags = '';
+    if (speedBoostTimer > 0) {
+      tags += `<div class="powerup-tag" style="background:rgba(255,200,0,0.3);color:#ffcc00;border:1px solid #ffcc00">⚡ SPD ${speedBoostTimer.toFixed(1)}s</div>`;
+    }
+    if (invisibleTimer > 0) {
+      tags += `<div class="powerup-tag" style="background:rgba(100,180,255,0.3);color:#66ccff;border:1px solid #66ccff">👻 INV ${invisibleTimer.toFixed(1)}s</div>`;
+    }
+    if (hasKnife) {
+      tags += `<div class="powerup-tag" style="background:rgba(255,60,60,0.3);color:#ff4444;border:1px solid #ff4444">🔪 READY</div>`;
+    }
+    powerupEl.innerHTML = tags;
+  }
+
+  function update(dt) {
+    if (gameState !== STATE.PLAYING) {
+      shakeAmount *= 0.9;
+      vignetteAlpha *= 0.9;
+      return;
+    }
+
+    survivalTime += dt;
+    timerEl.textContent = formatTime(survivalTime);
+
+    // ── Timer countdowns ─────────────────────
+    if (invincibleTimer > 0) invincibleTimer -= dt;
+    if (speedBoostTimer > 0) {
+      speedBoostTimer -= dt;
+      if (speedBoostTimer <= 0) player.speed = player.baseSpeed;
+    }
+    if (invisibleTimer > 0) invisibleTimer -= dt;
+    if (max.stunnedTimer > 0) max.stunnedTimer -= dt;
+
+    // Milestone messages
+    if (milestoneTimer > 0) {
+      milestoneTimer -= dt;
+      if (milestoneTimer <= 0) milestoneMsg = '';
+    }
+    const currentMilestone = Math.floor(survivalTime / 10) * 10;
+    if (currentMilestone > lastMilestone && currentMilestone > 0) {
+      lastMilestone = currentMilestone;
+      milestoneMsg = `${currentMilestone}s survived!`;
+      milestoneTimer = 2;
+      hintEl.textContent = milestoneMsg;
+      hintEl.style.color = '#c41e1e';
+      setTimeout(() => { hintEl.style.color = '#888'; if (milestoneTimer <= 0) hintEl.textContent = 'WASD to move  |  Survive!'; }, 1500);
+    }
+
+    // ── Player movement ──────────────────────
+    let dx = 0, dy = 0;
+    if (keys['w'] || keys['arrowup']) dy -= 1;
+    if (keys['s'] || keys['arrowdown']) dy += 1;
+    if (keys['a'] || keys['arrowleft']) dx -= 1;
+    if (keys['d'] || keys['arrowright']) dx += 1;
+
+    if (dx !== 0 || dy !== 0) {
+      const len = Math.sqrt(dx * dx + dy * dy);
+      dx /= len;
+      dy /= len;
+    }
+
+    const pRadius = 10;
+    let newX = player.x + dx * player.speed * dt * 60;
+    let newY = player.y + dy * player.speed * dt * 60;
+    if (!collideWithMap(newX, player.y, pRadius)) player.x = newX;
+    if (!collideWithMap(player.x, newY, pRadius)) player.y = newY;
+
+    // ── Item collection ──────────────────────
+    for (let i = 0; i < items.length; i++) {
+      if (!items[i].collected) {
+        const dist = Math.hypot(items[i].x - player.x, items[i].y - player.y);
+        if (dist < 22) collectItem(i);
+      }
+    }
+
+    // ── Max AI ──────────────────────────────
+    const distToPlayer = Math.hypot(max.x - player.x, max.y - player.y);
+
+    if (max.stunnedTimer > 0) {
+      // Max is stunned, don't move
+    } else if (invisibleTimer > 0) {
+      // Player invisible - Max wanders randomly
+      max.wanderTimer += dt;
+      if (max.wanderTimer > 0.8) {
+        max.wanderAngle = Math.random() * Math.PI * 2;
+        max.wanderTimer = 0;
+      }
+      const ws = max.baseSpeed * 0.6;
+      let wx = max.x + Math.cos(max.wanderAngle) * ws * dt * 60;
+      let wy = max.y + Math.sin(max.wanderAngle) * ws * dt * 60;
+      const mRadius = 12;
+      if (!collideWithMap(wx, max.y, mRadius)) max.x = wx;
+      else max.wanderAngle = Math.random() * Math.PI * 2;
+      if (!collideWithMap(max.x, wy, mRadius)) max.y = wy;
+      else max.wanderAngle = Math.random() * Math.PI * 2;
+    } else {
+      // Normal chase - BFS pathfinding
+      max.pathTimer += dt;
+      if (max.pathTimer > 0.4 || max.path.length === 0 || max.pathIndex >= max.path.length) {
+        max.path = bfsPath(max.x, max.y, player.x, player.y);
+        max.pathIndex = 0;
+        max.pathTimer = 0;
+      }
+
+      const timeBonus = Math.min(survivalTime * 0.01, 0.3);
+      const closeBonus = distToPlayer < 200 ? 0.15 : 0;
+      max.speed = max.baseSpeed + timeBonus + closeBonus;
+
+      if (max.path.length > 0 && max.pathIndex < max.path.length) {
+        const target = max.path[max.pathIndex];
+        const tdx = target.x - max.x;
+        const tdy = target.y - max.y;
+        const tdist = Math.sqrt(tdx * tdx + tdy * tdy);
+
+        if (tdist < 6) {
+          max.pathIndex++;
+        } else {
+          const mdx = (tdx / tdist) * max.speed * dt * 60;
+          const mdy = (tdy / tdist) * max.speed * dt * 60;
+          const mRadius = 12;
+          let mnx = max.x + mdx;
+          let mny = max.y + mdy;
+          if (!collideWithMap(mnx, max.y, mRadius)) max.x = mnx;
+          if (!collideWithMap(max.x, mny, mRadius)) max.y = mny;
+        }
+      }
+    }
+
+    // ── Check hit ────────────────────────────
+    if (distToPlayer < 22) {
+      hitPlayer();
+    }
+
+    // ── Screen effects ───────────────────────
+    if (distToPlayer < 300) {
+      shakeAmount = Math.max(shakeAmount, (1 - distToPlayer / 300) * 6);
+      vignetteAlpha = Math.max(vignetteAlpha, (1 - distToPlayer / 300) * 0.5);
+      if (distToPlayer < 120) {
+        maxEyeGlow = 0.7 + 0.3 * Math.sin(survivalTime * 12);
+      } else {
+        maxEyeGlow = 1;
+      }
+    } else {
+      shakeAmount *= 0.9;
+      vignetteAlpha *= 0.95;
+      maxEyeGlow = 1;
+    }
+
+    // ── Particles ────────────────────────────
+    if (Math.random() < 0.4) spawnDust(player.x, player.y);
+    updateParticles();
+    updateUI();
+  }
+
+  // ─── RENDERING ────────────────────────────
+  function drawMap() {
+    for (let y = 0; y < MAP_H; y++) {
+      for (let x = 0; x < MAP_W; x++) {
+        const tile = map[y][x];
+        const px = x * TILE;
+        const py = y * TILE;
+
+        if (tile === 1) {
+          // Wall
+          ctx.fillStyle = '#1a1410';
+          ctx.fillRect(px, py, TILE, TILE);
+          ctx.fillStyle = '#252018';
+          ctx.fillRect(px + 2, py + 2, TILE - 4, TILE - 4);
+          // Subtle highlight
+          ctx.fillStyle = '#2e261e';
+          ctx.fillRect(px + 2, py + 2, TILE - 4, 3);
+          ctx.fillRect(px + 2, py + 2, 3, TILE - 4);
+        } else if (tile === 2) {
+          // Furniture
+          ctx.fillStyle = '#2a2018';
+          ctx.fillRect(px, py, TILE, TILE);
+          ctx.fillStyle = '#3a2e22';
+          ctx.fillRect(px + 3, py + 3, TILE - 6, TILE - 6);
+          ctx.fillStyle = '#4a3a2a';
+          ctx.fillRect(px + 5, py + 5, TILE - 10, TILE - 10);
+        } else if (tile === 3) {
+          // Carpet / rug (decorative, walkable)
+          ctx.fillStyle = '#1e1812';
+          ctx.fillRect(px, py, TILE, TILE);
+          ctx.fillStyle = '#2a1e14';
+          ctx.fillRect(px + 2, py + 2, TILE - 4, TILE - 4);
+          ctx.fillStyle = '#35281c';
+          ctx.fillRect(px + 4, py + 4, TILE - 8, TILE - 8);
+          // Carpet pattern
+          ctx.fillStyle = '#3d2e20';
+          if ((x + y) % 3 === 0) ctx.fillRect(px + 6, py + 6, 4, 4);
+          if ((x + y) % 3 === 1) ctx.fillRect(px + 14, py + 14, 4, 4);
+        } else {
+          // Floor
+          ctx.fillStyle = '#1e1812';
+          ctx.fillRect(px, py, TILE, TILE);
+          // Floor pattern
+          ctx.fillStyle = '#221c14';
+          if ((x + y) % 2 === 0) {
+            ctx.fillRect(px, py, TILE, TILE);
+          }
+          // Subtle grid
+          ctx.strokeStyle = '#1a1410';
+          ctx.lineWidth = 1;
+          ctx.strokeRect(px + 0.5, py + 0.5, TILE, TILE);
+        }
+      }
+    }
+  }
+
+  function drawLightMask() {
+    // Light ambient dimming around the player instead of pitch black
+    const cx = player.x;
+    const cy = player.y;
+    const outerRadius = 400;
+    const innerRadius = 120;
+
+    // Single radial gradient: bright near player, slightly dim at edges
+    const gradient = ctx.createRadialGradient(cx, cy, innerRadius, cx, cy, outerRadius);
+    gradient.addColorStop(0, 'rgba(0,0,0,0)');
+    gradient.addColorStop(0.5, 'rgba(0,0,0,0.05)');
+    gradient.addColorStop(0.75, 'rgba(0,0,0,0.2)');
+    gradient.addColorStop(1, 'rgba(0,0,0,0.45)');
+
+    ctx.fillStyle = gradient;
+    ctx.fillRect(-20, -20, canvas.width + 40, canvas.height + 40);
+  }
+
+  function drawMax() {
+    const mx = max.x;
+    const my = max.y;
+    const dist = Math.hypot(max.x - player.x, max.y - player.y);
+    const dimFactor = dist > 300 ? 0.5 : dist > 180 ? 0.75 : 1;
+    const alpha = max.stunnedTimer > 0 ? 0.4 : dimFactor;
+
+    // Body (dark mass)
+    ctx.fillStyle = `rgba(26,10,10,${alpha})`;
+    ctx.beginPath();
+    ctx.arc(mx, my, 14, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Outline
+    ctx.strokeStyle = max.stunnedTimer > 0 ? 'rgba(100,100,100,0.6)' : `rgba(58,16,16,${alpha})`;
+    ctx.lineWidth = 2;
+    ctx.stroke();
+
+    // Eyes
+    const eyeGlow = maxEyeGlow;
+    const eyeColor = max.stunnedTimer > 0 ? '#888888' : '#ff0000';
+    ctx.fillStyle = eyeColor;
+    ctx.shadowColor = eyeColor;
+    ctx.shadowBlur = 8 * eyeGlow * alpha;
+    ctx.beginPath();
+    ctx.arc(mx - 5, my - 3, 3.5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(mx + 5, my - 3, 3.5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.shadowBlur = 0;
+
+    // Eye pupils
+    ctx.fillStyle = `rgba(0,0,0,${alpha})`;
+    ctx.beginPath();
+    ctx.arc(mx - 5, my - 3, 1.5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(mx + 5, my - 3, 1.5, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Stunned stars
+    if (max.stunnedTimer > 0) {
+      const st = survivalTime;
+      for (let i = 0; i < 3; i++) {
+        const sa = (i / 3) * Math.PI * 2 + st * 4;
+        const sx = mx + Math.cos(sa) * 18;
+        const sy = my + Math.sin(sa) * 18 - 5;
+        ctx.fillStyle = '#ffff88';
+        ctx.font = '10px monospace';
+        ctx.textAlign = 'center';
+        ctx.fillText('✦', sx, sy);
+      }
+    }
+
+    // Claws/tentacles
+    ctx.strokeStyle = max.stunnedTimer > 0 ? 'rgba(80,80,80,0.4)' : `rgba(42,16,16,${alpha})`;
+    ctx.lineWidth = 2;
+    for (let i = 0; i < 4; i++) {
+      const angle = (i / 4) * Math.PI * 2 + survivalTime * 2;
+      const sx = mx + Math.cos(angle) * 14;
+      const sy = my + Math.sin(angle) * 14;
+      ctx.beginPath();
+      ctx.moveTo(sx, sy);
+      ctx.lineTo(sx + Math.cos(angle) * 8, sy + Math.sin(angle) * 8);
+      ctx.stroke();
+    }
+  }
+
+  function drawPlayer() {
+    const px = player.x;
+    const py = player.y;
+    const alpha = invisibleTimer > 0 ? 0.3 + 0.2 * Math.sin(survivalTime * 15) : 1;
+    const blink = invincibleTimer > 0 ? (Math.floor(survivalTime * 20) % 2 === 0 ? 1 : 0.3) : 1;
+    const finalAlpha = Math.min(alpha, blink);
+
+    // Body
+    ctx.globalAlpha = finalAlpha;
+    ctx.fillStyle = invisibleTimer > 0 ? '#8899aa' : '#c8c0b8';
+    ctx.beginPath();
+    ctx.arc(px, py, 10, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = invisibleTimer > 0 ? '#667788' : '#8a8078';
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+
+    // Inner highlight
+    ctx.fillStyle = 'rgba(255,255,240,0.4)';
+    ctx.beginPath();
+    ctx.arc(px - 2, py - 2, 5, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Direction indicator
+    ctx.fillStyle = '#444';
+    ctx.beginPath();
+    ctx.arc(px, py - 8, 3, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.globalAlpha = 1;
+  }
+
+  function drawParticles() {
+    for (const p of particles) {
+      const dist = Math.hypot(p.x - player.x, p.y - player.y);
+      if (dist > 170) continue;
+      const alpha = p.life * (1 - dist / 180);
+      ctx.fillStyle = `rgba(200,190,170,${alpha * 0.6})`;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  function drawItems() {
+    const t = survivalTime;
+    for (const item of items) {
+      if (item.collected) continue;
+      const bob = Math.sin(t * 3 + item.bobOffset) * 3;
+      const ix = item.x;
+      const iy = item.y + bob;
+      const color = ITEM_COLORS[item.type];
+      const label = ITEM_LABELS[item.type];
+
+      // Glow
+      ctx.fillStyle = color.replace(')', ',0.3)').replace('rgb', 'rgba');
+      if (color.startsWith('#')) {
+        ctx.fillStyle = color + '44';
+      }
+      ctx.beginPath();
+      ctx.arc(ix, iy, 11, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Icon circle
+      ctx.fillStyle = 'rgba(0,0,0,0.7)';
+      ctx.beginPath();
+      ctx.arc(ix, iy, 9, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+
+      // Label
+      ctx.fillStyle = color;
+      ctx.font = 'bold 9px monospace';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(label, ix, iy);
+    }
+  }
+
+  function drawThreatIndicator() {
+    if (gameState !== STATE.PLAYING) return;
+    const dist = Math.hypot(max.x - player.x, max.y - player.y);
+    if (dist > 350 || dist < 120) return; // Only show at medium distance
+
+    const alpha = Math.max(0, Math.min(1, (350 - dist) / 200));
+    const pulse = 0.6 + 0.4 * Math.sin(survivalTime * 8);
+    const finalAlpha = alpha * pulse * 0.7;
+
+    // Direction from player to Max
+    const dx = max.x - player.x;
+    const dy = max.y - player.y;
+    const angle = Math.atan2(dy, dx);
+
+    // Place indicator at edge of visible area
+    const indicatorDist = 120;
+    const ix = player.x + Math.cos(angle) * indicatorDist;
+    const iy = player.y + Math.sin(angle) * indicatorDist;
+
+    // Draw pulsing red glow
+    const grad = ctx.createRadialGradient(ix, iy, 8, ix, iy, 30);
+    grad.addColorStop(0, `rgba(255,30,30,${finalAlpha})`);
+    grad.addColorStop(0.5, `rgba(255,0,0,${finalAlpha * 0.5})`);
+    grad.addColorStop(1, 'rgba(255,0,0,0)');
+    ctx.fillStyle = grad;
+    ctx.beginPath();
+    ctx.arc(ix, iy, 30, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Arrow pointing toward Max
+    ctx.save();
+    ctx.translate(ix, iy);
+    ctx.rotate(angle);
+    ctx.fillStyle = `rgba(255,50,50,${finalAlpha})`;
+    ctx.beginPath();
+    ctx.moveTo(14, 0);
+    ctx.lineTo(-8, -6);
+    ctx.lineTo(-3, 0);
+    ctx.lineTo(-8, 6);
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+  }
+
+  function drawVignette() {
+    if (vignetteAlpha < 0.01) return;
+    const w = canvas.width;
+    const h = canvas.height;
+    const grad = ctx.createRadialGradient(w / 2, h / 2, w * 0.45, w / 2, h / 2, w * 0.75);
+    grad.addColorStop(0, 'rgba(180,0,0,0)');
+    grad.addColorStop(1, `rgba(180,0,0,${vignetteAlpha})`);
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, w, h);
+  }
+
+  function render() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    // Screen shake
+    ctx.save();
+    if (shakeAmount > 0.1 && gameState === STATE.PLAYING) {
+      const sx = (Math.random() - 0.5) * shakeAmount * 2;
+      const sy = (Math.random() - 0.5) * shakeAmount * 2;
+      ctx.translate(sx, sy);
+    }
+
+    drawMap();
+
+    if (gameState === STATE.PLAYING) {
+      drawParticles();
+      drawItems();
+      drawMax();
+      drawPlayer();
+      drawLightMask();
+      drawMaxEyesInDark();
+    } else if (gameState === STATE.OVER) {
+      drawParticles();
+      drawMax();
+      drawPlayer();
+      drawLightMask();
+      drawMaxEyesInDark();
+    } else {
+      // Menu state: dim everything
+      drawLightMask();
+    }
+
+    drawThreatIndicator();
+    drawVignette();
+    ctx.restore();
+  }
+
+  function drawMaxEyesInDark() {
+    // No longer needed - villa is fully visible now
+    // The eyes are drawn in drawMax() instead
+  }
+
+  // ─── GAME LOOP ────────────────────────────
+  let lastTime = performance.now();
+
+  function gameLoop(timestamp) {
+    let dt = (timestamp - lastTime) / 1000;
+    if (dt > 0.1) dt = 0.1; // Cap to prevent jumps
+    if (dt <= 0) dt = 0.016;
+    lastTime = timestamp;
+
+    update(dt);
+    render();
+
+    // Heartbeat pulse effect in UI
+    if (gameState === STATE.PLAYING) {
+      const dist = Math.hypot(max.x - player.x, max.y - player.y);
+      if (dist < 120) {
+        const pulse = 1 + Math.sin(survivalTime * 12) * 0.08;
+        wrapper.style.transform = `scale(${pulse})`;
+        const redPulse = Math.floor(120 + 135 * Math.abs(Math.sin(survivalTime * 12)));
+        timerEl.style.color = `rgb(255,${Math.floor(80 - Math.abs(Math.sin(survivalTime * 12)) * 60)},${Math.floor(80 - Math.abs(Math.sin(survivalTime * 12)) * 60)})`;
+      } else {
+        wrapper.style.transform = '';
+        if (!milestoneTimer || milestoneTimer <= 0) timerEl.style.color = '#ccc';
+      }
+    } else {
+      wrapper.style.transform = '';
+    }
+
+    requestAnimationFrame(gameLoop);
+  }
+
+  // ─── INIT ─────────────────────────────────
+  spawnPlayer();
+  spawnMax();
+  livesEl.textContent = '';
+  powerupEl.innerHTML = '';
+  // Start in menu state - draw initial frame
+  render();
+  requestAnimationFrame(gameLoop);
+
+  // ─── TOUCH CONTROLS (MOBILE) ──────────────
+  canvas.addEventListener('touchstart', e => {
+    e.preventDefault();
+    if (gameState === STATE.MENU) startGame();
+    else if (gameState === STATE.OVER) resetToMenu();
+  });
+
+  // Virtual joystick for mobile
+  let touchActive = false;
+  let touchDX = 0, touchDY = 0;
+
+  canvas.addEventListener('touchmove', e => {
+    e.preventDefault();
+    if (gameState !== STATE.PLAYING) return;
+    const touch = e.touches[0];
+    const rect = canvas.getBoundingClientRect();
+    const tx = touch.clientX - rect.left;
+    const ty = touch.clientY - rect.top;
+    touchDX = (tx - player.x) / 50;
+    touchDY = (ty - player.y) / 50;
+    const len = Math.sqrt(touchDX * touchDX + touchDY * touchDY);
+    if (len > 1) { touchDX /= len; touchDY /= len; }
+    touchActive = true;
+  });
+
+  canvas.addEventListener('touchend', e => {
+    e.preventDefault();
+    touchActive = false;
+    touchDX = 0;
+    touchDY = 0;
+  });
+
+  // Inject touch input into keys dynamically
+  setInterval(() => {
+    if (touchActive && gameState === STATE.PLAYING) {
+      keys['w'] = touchDY < -0.3;
+      keys['s'] = touchDY > 0.3;
+      keys['a'] = touchDX < -0.3;
+      keys['d'] = touchDX > 0.3;
+    }
+  }, 50);
+
+})();
+</script>
+</body>
+</html>
